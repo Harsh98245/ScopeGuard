@@ -4,6 +4,23 @@ All notable changes to ScopeGuard are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added (2026-04-28 — core AI session)
+
+- `lib/ai/` layer (Build Order step 4):
+  - `lib/ai/types.ts` — `ParsedContract`, `ScopeCheckResult`, `ProjectContext`. The first two are inferred from Zod schemas so type and validator never drift.
+  - `lib/ai/schemas.ts` — single source of truth for the AI outputs. Each tool has a Zod schema (runtime validation) and a hand-maintained JSON Schema (Anthropic `input_schema` with `description` fields the model uses for quality). Two tools: `record_parsed_contract` and `record_scope_verdict`.
+  - `lib/ai/errors.ts` — `AIError`, `ContractParseError`, `ScopeCheckError`. Each subclass carries an `attempts` field so callers can distinguish "valid but rejected by retry budget" from a transport failure.
+  - `lib/ai/client.ts` — lazy Anthropic SDK singleton + `callTool()` helper that forces `tool_choice` to a specific tool. Returns `{ input, stopReason, usage }`. Tests mock this module rather than the SDK so the mock surface stays small.
+  - `lib/ai/parseContract.ts` — extracts deliverables, exclusions, payment terms, revision policy, and a 1–10 risk score from a contract text. Tool_use forced. Retries up to 3 times on Zod validation failure with a re-prompt that includes the validation issues so the model can self-correct. Logs `ai.parseContract.completed` with token usage.
+  - `lib/ai/checkScope.ts` — IN_SCOPE / OUT_OF_SCOPE / AMBIGUOUS verdict with confidence, cited clause, polite-decline draft, and change-order draft. Contract context block carries `cache_control: ephemeral` so back-to-back checks against the same contract hit Anthropic's prompt cache. Same retry policy as parseContract. Logs `ai.checkScope.completed` including `cache_read_input_tokens`.
+  - `lib/ai/index.ts` — barrel export.
+- Test fixtures:
+  - `tests/fixtures/contracts.ts` — five contracts (simple / complex / vague / exclusion-heavy / no-exclusions).
+  - `tests/fixtures/emails.ts` — ten email scenarios (2 clear in-scope, 2 clear out-of-scope, 3 ambiguous, 3 edge cases including the empty-thanks email and the multi-request email mixing in/out of scope items).
+- New unit tests:
+  - `tests/unit/ai/parseContract.test.ts` — happy path across all 5 fixtures, input-validation rejection (empty / oversize), retry-on-invalid-payload, MAX_ATTEMPTS exhaustion → ContractParseError, transport-error wrapping.
+  - `tests/unit/ai/checkScope.test.ts` — happy path across all 10 emails, prompt-construction asserting the cache_control marker on the contract block (and its absence on the email block), deterministic context rendering, retry behaviour, MAX_ATTEMPTS exhaustion → ScopeCheckError.
+
 ### Added (2026-04-28 — auth session)
 
 - Auth surface (Build Order step 3):

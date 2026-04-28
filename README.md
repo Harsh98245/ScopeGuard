@@ -124,7 +124,8 @@ This scaffold is **session 1 of N**. The full Build Order from the spec is:
 1. ~~Scaffold~~
 2. ~~Database (schema + RLS migration)~~
 3. ~~Auth (Supabase auth, login/signup, dashboard middleware)~~
-4. Core AI (`parseContract.ts`, `checkScope.ts`) — _next_
+4. ~~Core AI (`parseContract.ts`, `checkScope.ts`)~~
+5. Contract upload + extraction (Storage + pdf-parse + mammoth) — _next_
 5. Contract upload + extraction
 6. Inbound email pipeline (Postmark + Inngest)
 7. Scope-check UI
