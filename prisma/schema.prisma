@@ -1,0 +1,387 @@
+// =============================================================================
+// ScopeGuard — Prisma schema
+// =============================================================================
+// Every model and field carries a `///` TSDoc comment so the generated client
+// surfaces inline docs in IDEs. Field-level comments also drive docs/schema.md.
+//
+// Conventions:
+//   - All primary keys are UUIDs (cuid would also work, UUID picked for
+//     compatibility with Supabase auth.users.id which is uuid).
+//   - Money columns use Decimal(12,2) — never floats.
+//   - Every userId-bearing table has ON DELETE CASCADE so account deletion
+//     reliably purges user data (compliance / GDPR).
+//   - Every userId-bearing table has an RLS policy enforcing
+//     `userId = auth.uid()`. See migrations/<ts>_enable_rls/migration.sql.
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_POOL_URL")
+  directUrl = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+/// Subscription tiers. FREE is the default; paid tiers are gated through
+/// PlanGate component and lib/stripe/plans.ts limits.
+enum PlanTier {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+}
+
+/// Lifecycle of a freelance engagement.
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+/// Result of a scope check produced by lib/ai/checkScope.ts.
+enum ScopeVerdict {
+  IN_SCOPE
+  OUT_OF_SCOPE
+  AMBIGUOUS
+}
+
+/// What the user actually did after seeing the verdict — used for analytics
+/// and future model fine-tuning.
+enum UserAction {
+  SENT_CHANGE_ORDER
+  IGNORED
+  ACCEPTED_ANYWAY
+}
+
+/// Direction of a financial transaction.
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+/// Source platforms supported by the Financial OS module. Add a new value here
+/// before wiring a new integration in lib/integrations/.
+enum IntegrationSource {
+  STRIPE
+  PAYPAL
+  GUMROAD
+  SHOPIFY
+  ETSY
+  UPWORK
+  WISE
+  PLAID
+}
+
+/// Tax jurisdiction used by lib/tax/estimate.ts. Add new jurisdictions only
+/// after adding the corresponding bracket logic and unit tests.
+enum Jurisdiction {
+  US
+  CA
+  UK
+}
+
+// -----------------------------------------------------------------------------
+// User
+// -----------------------------------------------------------------------------
+
+/// A ScopeGuard customer. The `id` matches the Supabase auth.users.id so RLS
+/// policies can reference `auth.uid()` directly.
+model User {
+  /// Primary key — must equal the Supabase auth user UUID.
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Login email. Synced from auth.users on signup; updates require a verify flow.
+  email String @unique
+
+  /// Stripe customer ID created on first checkout. Null until the user starts a paid plan.
+  stripeCustomerId String? @unique
+
+  /// Active subscription tier. Mutated only by the Stripe webhook handler.
+  planTier PlanTier @default(FREE)
+
+  /// Per-user inbound email alias, e.g. `jane-abc123@inbound.scopeguard.app`.
+  /// Generated at signup and never reused. Provides a stable address users can
+  /// forward client emails to.
+  inboundEmailAlias String @unique
+
+  /// IANA timezone for date formatting in the UI.
+  timezone String @default("America/Toronto")
+
+  /// Tax jurisdiction. Drives quarterly tax estimates and currency defaults.
+  jurisdiction Jurisdiction @default(US)
+
+  /// First-party timestamps.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Reverse relations.
+  projects     Project[]
+  transactions Transaction[]
+  integrations Integration[]
+
+  @@index([planTier])
+  @@map("users")
+}
+
+// -----------------------------------------------------------------------------
+// Project
+// -----------------------------------------------------------------------------
+
+/// A freelance engagement with a single client. Owns at least one Contract and
+/// receives ScopeCheck records over its lifetime.
+model Project {
+  /// Primary key.
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Owner. Cascades on user deletion.
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Internal name shown in the dashboard.
+  name String
+
+  /// Client display name. Surfaces in change-order drafts.
+  clientName String
+
+  /// Client email. Used to auto-route inbound emails to the right project.
+  /// May be null while the project is being set up.
+  clientEmail String?
+
+  /// Project lifecycle state.
+  status ProjectStatus @default(ACTIVE)
+
+  /// Hourly rate used to monetise change orders. Optional: fixed-fee
+  /// engagements may leave this null.
+  hourlyRate Decimal? @db.Decimal(10, 2)
+
+  /// ISO 4217 currency code. Defaults to USD; mirrors user jurisdiction default.
+  currency String @default("USD")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contracts   Contract[]
+  scopeChecks ScopeCheck[]
+
+  @@index([userId, status])
+  @@index([userId, clientEmail])
+  @@map("projects")
+}
+
+// -----------------------------------------------------------------------------
+// Contract
+// -----------------------------------------------------------------------------
+
+/// An uploaded contract document plus its AI-extracted structure.
+/// Multiple contracts per project are allowed (amendments, renewals).
+model Contract {
+  /// Primary key.
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Owning project. Cascades on project deletion.
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// Original filename uploaded by the user.
+  fileName String
+
+  /// Object key in the Supabase Storage `contracts` bucket. Path format:
+  /// `<userId>/<projectId>/<uuid>.<ext>`.
+  storageKey String
+
+  /// Plain text extracted via pdf-parse / mammoth. Up to ~16MB; longer
+  /// contracts are summarised before AI processing.
+  rawText String? @db.Text
+
+  /// Wall-clock timestamp when AI parsing completed. Null while pending.
+  parsedAt DateTime?
+
+  /// JSON array of ParsedContract.deliverables. See lib/ai/parseContract.ts
+  /// for the schema.
+  deliverables Json?
+
+  /// JSON array of explicit out-of-scope items extracted from the contract.
+  exclusions Json?
+
+  /// JSON array of vague phrases that could trigger scope disputes
+  /// ("reasonable revisions", "as needed", etc.).
+  ambiguousTerms Json?
+
+  /// JSON object with payment schedule, late-fee clauses, etc.
+  paymentTerms Json?
+
+  /// AI-assigned 1-10 risk score. Higher = more scope-dispute risk.
+  overallRiskScore Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, parsedAt])
+  @@map("contracts")
+}
+
+// -----------------------------------------------------------------------------
+// ScopeCheck
+// -----------------------------------------------------------------------------
+
+/// One inbound client message + the verdict produced by checkScope().
+/// Each ScopeCheck is immutable once written; user reactions are stored in
+/// `userAction`.
+model ScopeCheck {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Project the check ran against.
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// Snapshot of the contract version used (null if no parsed contract was
+  /// available at check time — verdict will then be AMBIGUOUS).
+  contractId String? @db.Uuid
+
+  /// Original email body, plain-text, untouched. Stored for audit + retraining.
+  rawEmailContent String @db.Text
+
+  /// Email subject line, when supplied by Postmark.
+  emailSubject String?
+
+  /// `From:` address as parsed from the inbound payload.
+  emailFromAddress String?
+
+  /// Verdict from the AI.
+  verdict ScopeVerdict
+
+  /// Confidence in the verdict, 0.0 to 1.0. UI thresholds: ≥0.85 strong,
+  /// 0.6-0.85 medium, <0.6 surfaces as AMBIGUOUS regardless of `verdict`.
+  confidence Float
+
+  /// Exact contract text the model relied on. Null only when the verdict
+  /// could not be tied to any clause.
+  citedClause String? @db.Text
+
+  /// Section/clause reference (e.g. "Section 2.1") when extractable.
+  clauseReference String?
+
+  /// Drafted polite decline email, ready for user copy/paste.
+  draftResponse String? @db.Text
+
+  /// Drafted change-order text with pricing placeholders.
+  changeOrderText String? @db.Text
+
+  /// Estimated additional hours required for the requested work.
+  estimatedHours Float?
+
+  /// What the user did with the verdict. Updated by the dashboard, not by AI.
+  userAction UserAction?
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([verdict])
+  @@map("scope_checks")
+}
+
+// -----------------------------------------------------------------------------
+// Transaction
+// -----------------------------------------------------------------------------
+
+/// A unified financial transaction synced from any IntegrationSource.
+/// The `(source, externalId)` unique constraint guarantees idempotent syncs.
+model Transaction {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Owner. Cascades on user deletion.
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Originating platform.
+  source IntegrationSource
+
+  /// Stable ID assigned by the source platform (Stripe charge id,
+  /// PayPal transaction id, Plaid transaction_id, etc.).
+  externalId String
+
+  /// INCOME or EXPENSE. Sign of `amount` is always positive — direction is
+  /// expressed by `type`.
+  type TransactionType
+
+  /// Absolute amount with two decimals. Always positive.
+  amount Decimal @db.Decimal(12, 2)
+
+  /// ISO 4217 currency code from the source platform.
+  currency String
+
+  /// Free-text description from the source.
+  description String?
+
+  /// AI-assigned expense category (e.g. "Software", "Travel", "Contractors").
+  /// Income transactions leave this null.
+  category String?
+
+  /// Whether the user has flagged this expense as tax-deductible.
+  /// Defaulted by AI; user can override.
+  taxDeductible Boolean @default(false)
+
+  /// Optional receipt image stored in Supabase Storage `receipts` bucket.
+  receiptKey String?
+
+  /// When the transaction occurred at the source (not when it was synced).
+  occurredAt DateTime
+
+  createdAt DateTime @default(now())
+
+  @@unique([source, externalId])
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([userId, type, occurredAt])
+  @@map("transactions")
+}
+
+// -----------------------------------------------------------------------------
+// Integration
+// -----------------------------------------------------------------------------
+
+/// OAuth-or-API-key linkage to a third-party platform. One row per
+/// `(userId, source)` pair. Tokens are encrypted with AES-256-GCM via
+/// lib/utils/encryption.ts before write.
+model Integration {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Platform identifier. Combined with userId as a uniqueness constraint
+  /// to prevent accidental dual-connections.
+  source IntegrationSource
+
+  /// Encrypted access token. Stored as `<iv>:<tag>:<ciphertext>` hex triples.
+  /// NEVER log this column. NEVER return it from an API.
+  accessToken String
+
+  /// Encrypted refresh token, when the platform issues one.
+  refreshToken String?
+
+  /// Wall-clock expiry of the access token, used to drive proactive refresh.
+  tokenExpiresAt DateTime?
+
+  /// Last successful sync time. Drives the "Last synced X minutes ago" UI.
+  lastSyncedAt DateTime?
+
+  /// Soft-delete-friendly flag. Tokens are revoked when set false but the
+  /// row is retained for audit until the user removes the integration.
+  isActive Boolean @default(true)
+
+  /// Platform-specific metadata (Plaid item_id, Stripe Connect account id,
+  /// etc.). Schema documented per-source in docs/schema.md.
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, source])
+  @@index([userId, isActive])
+  @@map("integrations")
+}
