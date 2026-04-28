@@ -13,6 +13,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 
 const PROTECTED_PREFIXES = ['/projects', '/inbox', '/finances', '/settings'];
+const AUTH_ONLY_PATHS = ['/login', '/signup'];
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   let response = NextResponse.next({ request: { headers: request.headers } });
@@ -44,13 +45,23 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Redirect unauthenticated users away from protected routes.
   const path = request.nextUrl.pathname;
   const isProtected = PROTECTED_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+  const isAuthOnly = AUTH_ONLY_PATHS.includes(path);
+
+  // Redirect unauthenticated users away from protected routes.
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     url.searchParams.set('next', path);
+    return NextResponse.redirect(url);
+  }
+
+  // Redirect signed-in users away from /login and /signup.
+  if (isAuthOnly && user) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/projects';
+    url.search = '';
     return NextResponse.redirect(url);
   }
 
