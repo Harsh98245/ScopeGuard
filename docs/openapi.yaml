@@ -1,0 +1,145 @@
+openapi: 3.1.0
+
+# =============================================================================
+# ScopeGuard — Public API
+# =============================================================================
+# Skeleton for the OpenAPI contract. Every route under app/api/ MUST have a
+# corresponding entry here. When you add a route, also:
+#   1. Add Zod-validated request/response schemas (lib/utils/validation.ts).
+#   2. Add an integration test that hits the route.
+#   3. Document any new error codes in the `ErrorEnvelope` schema.
+# =============================================================================
+
+info:
+  title: ScopeGuard API
+  version: 0.1.0
+  description: |
+    Internal-first API surface for the ScopeGuard product. Authenticated routes
+    require a Supabase auth cookie (set by the SSR client). Webhook routes are
+    authenticated by provider-specific signature headers.
+  contact:
+    name: ScopeGuard
+    url: https://scopeguard.app
+servers:
+  - url: https://app.scopeguard.app
+    description: Production
+  - url: http://localhost:3000
+    description: Local development
+
+# -----------------------------------------------------------------------------
+# Reusable schemas
+# -----------------------------------------------------------------------------
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sb-access-token
+      description: Supabase auth cookie. Set by the SSR client on login.
+    stripeSignature:
+      type: apiKey
+      in: header
+      name: Stripe-Signature
+    postmarkSignature:
+      type: apiKey
+      in: header
+      name: X-Postmark-Signature
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - INVALID_JSON
+                - VALIDATION_FAILED
+                - UNAUTHENTICATED
+                - FORBIDDEN
+                - NOT_FOUND
+                - RATE_LIMITED
+                - PLAN_LIMIT_EXCEEDED
+                - INTEGRATION_ERROR
+                - INTERNAL
+            message:
+              type: string
+            fields:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+
+    ScopeVerdict:
+      type: string
+      enum: [IN_SCOPE, OUT_OF_SCOPE, AMBIGUOUS]
+
+    ScopeCheckResult:
+      type: object
+      required: [verdict, confidence, reasoning, draftPoliteDecline, draftChangeOrder]
+      properties:
+        verdict: { $ref: '#/components/schemas/ScopeVerdict' }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        reasoning: { type: string }
+        citedClause: { type: [string, 'null'] }
+        clauseReference: { type: [string, 'null'] }
+        draftPoliteDecline: { type: string }
+        draftChangeOrder: { type: string }
+        estimatedAdditionalHours: { type: [number, 'null'] }
+
+  responses:
+    Unauthenticated:
+      description: Caller is not signed in.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    RateLimited:
+      description: Too many requests.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+# -----------------------------------------------------------------------------
+# Paths — placeholders. Filled out as the routes are built.
+# -----------------------------------------------------------------------------
+paths:
+  /api/health:
+    get:
+      summary: Liveness probe
+      operationId: getHealth
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+
+  # Future entries land here. Keep them grouped by feature, alphabetical
+  # within a group.
+  #
+  # /api/contracts:               TODO (session 4)
+  # /api/contracts/{id}:          TODO (session 4)
+  # /api/contracts/{id}/parse:    TODO (session 4)
+  # /api/scope/check:             TODO (session 4)
+  # /api/finances/transactions:   TODO (session 9)
+  # /api/finances/summary:        TODO (session 9)
+  # /api/finances/tax-estimate:   TODO (session 9)
+  # /api/integrations/stripe-connect: TODO (session 8)
+  # /api/integrations/paypal:     TODO (session 10)
+  # /api/integrations/plaid:      TODO (session 10)
+  # /api/webhooks/stripe:         TODO (session 8)
+  # /api/webhooks/postmark:       TODO (session 6)
+  # /api/webhooks/inngest:        TODO (session 6)
