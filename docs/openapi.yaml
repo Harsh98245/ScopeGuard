@@ -127,13 +127,156 @@ paths:
                   ok: { type: boolean }
                   version: { type: string }
 
+  /api/contracts:
+    post:
+      summary: Upload a contract file
+      description: |
+        Multipart upload of a PDF/DOCX/TXT/MD contract for a specific project.
+        The Storage object is created synchronously; text extraction and AI
+        parsing happen asynchronously via the `contract/uploaded` Inngest
+        event.
+      operationId: uploadContract
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, projectId]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                projectId:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Contract row created; parsing enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:        { type: string, format: uuid }
+                  projectId: { type: string, format: uuid }
+                  fileName:  { type: string }
+                  parsedAt:  { type: [string, 'null'], format: date-time }
+                  createdAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/Unauthenticated' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Project not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '413':
+          description: File exceeds 10 MB.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '415':
+          description: Unsupported file type.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/contracts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Fetch a contract summary + parsed structure
+      operationId: getContract
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Contract summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:               { type: string, format: uuid }
+                  projectId:        { type: string, format: uuid }
+                  fileName:         { type: string }
+                  parsedAt:         { type: [string, 'null'], format: date-time }
+                  deliverables:     {}
+                  exclusions:       {}
+                  paymentTerms:     {}
+                  overallRiskScore: { type: [integer, 'null'] }
+                  createdAt:        { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Contract not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    delete:
+      summary: Remove a contract (row + Storage object)
+      operationId: deleteContract
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Contract not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/contracts/{id}/parse:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      summary: Re-trigger AI parsing for a contract
+      description: |
+        Clears `parsedAt` and republishes the `contract/uploaded` event so
+        the Inngest function re-runs. Used after a parse failure or when
+        the document was replaced.
+      operationId: reparseContract
+      security: [{ cookieAuth: [] }]
+      responses:
+        '202':
+          description: Parse re-enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [enqueued] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Contract not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/webhooks/inngest:
+    get:
+      summary: Inngest function discovery (SDK-managed)
+      operationId: inngestServeGet
+      responses:
+        '200': { description: SDK-defined response }
+    post:
+      summary: Inngest invocation endpoint (SDK-managed)
+      operationId: inngestServePost
+      responses:
+        '200': { description: SDK-defined response }
+
   # Future entries land here. Keep them grouped by feature, alphabetical
   # within a group.
   #
-  # /api/contracts:               TODO (session 4)
-  # /api/contracts/{id}:          TODO (session 4)
-  # /api/contracts/{id}/parse:    TODO (session 4)
-  # /api/scope/check:             TODO (session 4)
+  # /api/scope/check:             TODO (session 7)
   # /api/finances/transactions:   TODO (session 9)
   # /api/finances/summary:        TODO (session 9)
   # /api/finances/tax-estimate:   TODO (session 9)

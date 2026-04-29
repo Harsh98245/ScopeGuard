@@ -199,6 +199,19 @@ Day 2:
 
 ---
 
+## Storage bucket setup (one-time)
+
+The contract upload pipeline expects a private Storage bucket named `contracts`. Create it once per environment:
+
+```sql
+-- Run in the Supabase SQL editor against your project.
+insert into storage.buckets (id, name, public)
+values ('contracts', 'contracts', false)
+on conflict (id) do nothing;
+```
+
+Object keys are written under `<userId>/<projectId>/<uuid>.<ext>` by `lib/contracts/storage.ts`. The app uses the service-role client for Storage reads/writes; the user's browser only ever receives signed URLs (15-minute TTL by default).
+
 ## Troubleshooting
 
 **`Error: ENCRYPTION_KEY env var is required`** — set it in `.env.local` (`openssl rand -hex 32`).

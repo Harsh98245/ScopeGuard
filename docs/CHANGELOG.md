@@ -4,6 +4,31 @@ All notable changes to ScopeGuard are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added (2026-04-28 — contract upload session)
+
+- Build Order step 5: contract upload + extraction + async parse pipeline.
+- `lib/contracts/extract.ts` — text extraction from PDF/DOCX/text/markdown buffers via dynamic imports of `pdf-parse` and `mammoth`. Hard 10 MB ceiling and 120k-char post-extraction cap with truncation marker. Three typed errors (`UnsupportedFileTypeError`, `ContractTooLargeError`, `ExtractionFailedError`).
+- `lib/contracts/storage.ts` — Supabase Storage helpers for the `contracts` bucket. Object keys follow `<userId>/<projectId>/<uuid>.<ext>`. Helpers: `buildContractStorageKey`, `uploadContractBuffer`, `downloadContractBuffer`, `getSignedContractUrl` (15-min default TTL), `deleteContractObject`.
+- `tests/unit/contracts/extract.test.ts` — MIME dispatch, whitespace normalisation, oversize rejection, parser-failure wrapping, truncation behaviour. `pdf-parse` and `mammoth` are vi-mocked so the suite stays hermetic.
+- `inngest/functions/parseUploadedContract.ts` — async pipeline triggered by `contract/uploaded`: load contract row, download from Storage, extract text, persist `rawText`, run `parseContract`, save deliverables/exclusions/paymentTerms/overallRiskScore + `parsedAt`. Idempotent (short-circuits when already parsed). 3 retries with single-concurrency-per-contract.
+- `inngest/functions/index.ts` + `app/api/webhooks/inngest/route.ts` — Inngest serve endpoint registering the function list. Adding a new function only requires exporting it from the barrel.
+- API routes:
+  - `POST /api/contracts` — multipart upload. Authenticated, project-scoped, MIME + size validated, rate-limited via `contractParseLimiter`. Streams to Storage, creates the contract row with `rawText: null`, fires `contract/uploaded`, returns 201.
+  - `GET /api/contracts/:id` — status polling shape (id, fileName, parsedAt, deliverables/exclusions/paymentTerms/overallRiskScore).
+  - `DELETE /api/contracts/:id` — removes the row and best-effort deletes the Storage object (failures logged for the orphan-sweep).
+  - `POST /api/contracts/:id/parse` — re-trigger parsing (clears `parsedAt` first so the Inngest function doesn't short-circuit). Rate-limited.
+- Project surface:
+  - `app/(dashboard)/projects/actions.ts` — `createProjectAction` with Zod-validated FormData and inline field errors.
+  - `components/projects/NewProjectForm.tsx` — accessible client island with field-level error rendering.
+  - `app/(dashboard)/projects/new/page.tsx` — new-project page.
+  - Updated `app/(dashboard)/projects/page.tsx` — real card grid with contract/scope-check counts and a "New project" CTA.
+  - `app/(dashboard)/projects/[id]/page.tsx` — project detail with parse-status badge, link to contracts, scope-log placeholder.
+  - `app/(dashboard)/projects/[id]/contracts/page.tsx` — upload area + parsed-clause viewer.
+- UI components:
+  - `components/ui/badge.tsx` — pill badge with default/secondary/destructive/outline/success variants (success uses the verdict-in-scope token).
+  - `components/shared/UploadDropzone.tsx` — drag-and-drop with keyboard fallback, client-side size guard, `router.refresh()` after a successful POST so the page re-reads the contract row.
+  - `components/scope/ContractClauseViewer.tsx` — renders deliverables (with ambiguous flags + reasons), exclusions, and payment terms. Pure presentational; receives JSON straight from the Prisma row.
+
 ### Added (2026-04-28 — core AI session)
 
 - `lib/ai/` layer (Build Order step 4):
