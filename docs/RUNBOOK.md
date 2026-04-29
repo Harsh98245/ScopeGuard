@@ -199,6 +199,20 @@ Day 2:
 
 ---
 
+## Postmark setup (one-time)
+
+The inbound email pipeline depends on a Postmark Server with inbound forwarding configured for the domain in `INBOUND_EMAIL_DOMAIN` (default `inbound.scopeguard.app`). One-time setup:
+
+1. **Create a Postmark Server** at postmarkapp.com → Servers → New. Track the Server Token in `POSTMARK_SERVER_TOKEN`.
+2. **Verify the outbound sender domain** (matches `OUTBOUND_FROM_EMAIL`'s domain). DNS records (DKIM + Return-Path) must be added before Postmark will deliver.
+3. **Configure inbound**: Server → Inbound stream → Settings.
+   - **Inbound webhook URL**: `https://app.scopeguard.app/api/webhooks/postmark`.
+   - **Custom HTTP headers**: add a header named `X-Postmark-Signature` with the value of `POSTMARK_WEBHOOK_SECRET` (Postmark echoes the header verbatim on every webhook). Generate the secret with `openssl rand -hex 32`.
+   - **Inbound domain**: point `MX 10 inbound.postmarkapp.com.` from your `INBOUND_EMAIL_DOMAIN` (e.g. `inbound.scopeguard.app`). DNS propagation can take up to an hour.
+4. **Smoke-test**: from any email client, send a message to `whatever@inbound.scopeguard.app`. Postmark → Servers → Inbound stream → Activity should show the message; Inngest Cloud should show a `scope/email.received` event followed by a `process-inbound-email` run.
+
+If the webhook returns 401, the `X-Postmark-Signature` header value doesn't match `POSTMARK_WEBHOOK_SECRET`. Re-copy from the Postmark dashboard.
+
 ## Storage bucket setup (one-time)
 
 The contract upload pipeline expects a private Storage bucket named `contracts`. Create it once per environment:

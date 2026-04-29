@@ -4,6 +4,19 @@ All notable changes to ScopeGuard are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Added (2026-04-28 — inbound email pipeline session)
+
+- Build Order step 6: end-to-end scope-check pipeline triggered by inbound email.
+- `lib/email/inbound.ts` — `verifyPostmarkSignature` constant-time check against `POSTMARK_WEBHOOK_SECRET`, `InboundPayloadSchema` Zod schema for the subset of Postmark fields we use, and `toScopeEmailEvent` to lift those into the typed `scope/email.received` shape. `StrippedTextReply` is preferred over `TextBody` so quoted reply history doesn't reach Claude. Both `From:` and `To:` accept either `"Name <email>"` headers or bare addresses.
+- `lib/email/outbound.ts` — lazy Postmark `ServerClient` singleton + `sendEmail({ to, subject, textBody, htmlBody?, messageStream? })`. Local-dev convenience: when `POSTMARK_SERVER_TOKEN` is unset and `NODE_ENV !== production` the helper logs a `email.dryrun` line and returns null instead of failing.
+- New Inngest event `contract/parsed` in the typed registry. `parseUploadedContract` now emits it from the post-save step so `processInboundEmail` can `step.waitForEvent` on the matching `contractId`.
+- `inngest/functions/processInboundEmail.ts` — the verdict pipeline. Steps: lookup user by `inboundEmailAlias`; match project by sender email (exact `clientEmail`, falling back to the user's most recent active project); load latest contract; wait up to 15 min for `contract/parsed` when `parsedAt` is null; run `checkScope`; persist `ScopeCheck`; emit `scope/check.completed`. Idempotency keyed on `event.data.postmarkMessageId` so Postmark resends never double-process. NonRetriableError on unknown alias and empty body.
+- `inngest/functions/notifyUserOfVerdict.ts` — fires on `scope/check.completed`, sends a short transactional email with the verdict label, confidence, cited clause, estimated hours (when out of scope), and deep links to inbox + project. Idempotency keyed on `event.data.scopeCheckId` so a duplicate event doesn't double-send.
+- `app/api/webhooks/postmark/route.ts` — receives the inbound payload. Verifies the `X-Postmark-Signature` header (a shared secret echoed back by Postmark — Postmark inbound is not natively signed; see ADR-002). Parses + validates the body. Publishes `scope/email.received` with the Inngest event id set to the Postmark `MessageID` so retries reuse the same id and Inngest's built-in idempotency rejects duplicates. Always returns 200 within milliseconds — heavy work is async.
+- `tests/fixtures/postmark.ts` — three Postmark inbound payloads (full canonical, header-form addresses, malformed missing MessageID).
+- `tests/unit/email/inbound.test.ts` — signature verification (timing-safe, length-mismatch, env-unset, null-header), payload schema accept/strip/reject, `toScopeEmailEvent` body-fallback + header-form parsing + lowercasing + Postmark-MessageID preservation.
+- `tests/unit/email/outbound.test.ts` — dev dry-run (no token + non-production), missing FROM error, Postmark forward with full args, htmlBody only when supplied, custom MessageStream.
+
 ### Added (2026-04-28 — contract upload session)
 
 - Build Order step 5: contract upload + extraction + async parse pipeline.

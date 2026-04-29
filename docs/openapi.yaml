@@ -273,10 +273,56 @@ paths:
       responses:
         '200': { description: SDK-defined response }
 
+  /api/webhooks/postmark:
+    post:
+      summary: Postmark inbound webhook receiver
+      description: |
+        Postmark POSTs the parsed inbound email to this URL. The handler
+        verifies the X-Postmark-Signature shared secret, validates the
+        body shape, and publishes a `scope/email.received` Inngest event
+        whose id equals the Postmark MessageID for natural deduplication.
+        Always returns 200 quickly — heavy work happens async in the
+        processInboundEmail Inngest function.
+      operationId: postmarkInboundWebhook
+      security: [{ postmarkSignature: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Subset of the Postmark inbound payload we use.
+              required: [MessageID, From, To]
+              properties:
+                MessageID:         { type: string }
+                From:              { type: string }
+                FromFull:          { type: object, properties: { Email: { type: string }, Name: { type: string } } }
+                To:                { type: string }
+                ToFull:            { type: array, items: { type: object, properties: { Email: { type: string } } } }
+                Subject:           { type: string }
+                TextBody:          { type: string }
+                StrippedTextReply: { type: string }
+                HtmlBody:          { type: string }
+      responses:
+        '200':
+          description: Accepted (or accepted-with-reason for malformed payloads — never retried).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: boolean }
+                  reason:   { type: string }
+        '401':
+          description: Bad or missing X-Postmark-Signature.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
   # Future entries land here. Keep them grouped by feature, alphabetical
   # within a group.
   #
-  # /api/scope/check:             TODO (session 7)
+  # /api/scope/check:             TODO (session 7 — manual trigger from UI)
   # /api/finances/transactions:   TODO (session 9)
   # /api/finances/summary:        TODO (session 9)
   # /api/finances/tax-estimate:   TODO (session 9)
