@@ -103,6 +103,15 @@ export const parseUploadedContract = inngest.createFunction(
       });
     });
 
+    // ---------- 5. Notify any waiters -------------------------------------
+    // processInboundEmail uses step.waitForEvent('contract/parsed') to
+    // handle the race where a client email arrives before parsing finishes.
+    // step.sendEvent is memoised so retries of this step do not duplicate.
+    await step.sendEvent('emit-contract-parsed', {
+      name: 'contract/parsed',
+      data: { userId, projectId, contractId },
+    });
+
     return {
       contractId,
       projectId,

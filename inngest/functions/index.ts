@@ -9,6 +9,12 @@
  *              Inngest will auto-register it on the next deploy.
  */
 
+import { notifyUserOfVerdict } from '@/inngest/functions/notifyUserOfVerdict';
 import { parseUploadedContract } from '@/inngest/functions/parseUploadedContract';
+import { processInboundEmail } from '@/inngest/functions/processInboundEmail';
 
-export const functions = [parseUploadedContract] as const;
+export const functions = [
+  parseUploadedContract,
+  processInboundEmail,
+  notifyUserOfVerdict,
+] as const;

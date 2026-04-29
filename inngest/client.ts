@@ -49,6 +49,16 @@ type Events = {
       contractId: string;
     };
   };
+  /** Emitted by parseUploadedContract when a contract row reaches parsedAt
+   *  != null. processInboundEmail listens for this with step.waitForEvent
+   *  to handle the "email arrived before parsing finished" race. */
+  'contract/parsed': {
+    data: {
+      userId: string;
+      projectId: string;
+      contractId: string;
+    };
+  };
   /** A user connected a new financial integration; trigger a backfill sync. */
   'integration/connected': {
     data: {
