@@ -9,12 +9,20 @@
  *              Inngest will auto-register it on the next deploy.
  */
 
+import { categorizeTransaction } from '@/inngest/functions/categorizeTransaction';
 import { notifyUserOfVerdict } from '@/inngest/functions/notifyUserOfVerdict';
 import { parseUploadedContract } from '@/inngest/functions/parseUploadedContract';
 import { processInboundEmail } from '@/inngest/functions/processInboundEmail';
+import {
+  syncIntegrationOnConnect,
+  syncIntegrationsHourly,
+} from '@/inngest/functions/syncIntegration';
 
 export const functions = [
   parseUploadedContract,
   processInboundEmail,
   notifyUserOfVerdict,
+  categorizeTransaction,
+  syncIntegrationOnConnect,
+  syncIntegrationsHourly,
 ] as const;
