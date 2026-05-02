@@ -46,11 +46,13 @@ function minLevel(): Level {
 function emit(level: Level, msg: string, fields?: Record<string, unknown>): void {
   if (LEVEL_PRIORITY[level] < LEVEL_PRIORITY[minLevel()]) return;
 
+  const redactedFields = fields ? (redact(fields) as Record<string, unknown>) : undefined;
+
   const line = {
     timestamp: new Date().toISOString(),
     level,
     msg,
-    ...((fields ? (redact(fields) as Record<string, unknown>) : undefined) ?? {}),
+    ...(redactedFields ?? {}),
   };
 
   // We deliberately use console here — this is the *one* allowed call site
@@ -58,6 +60,32 @@ function emit(level: Level, msg: string, fields?: Record<string, unknown>): void
   // warn/error; debug/info we route through warn to ensure visibility on Vercel.
   if (level === 'error') console.error(JSON.stringify(line));
   else console.warn(JSON.stringify(line));
+
+  // Best-effort Sentry bridge. Fire-and-forget — never blocks the request
+  // path. The bridge module gracefully no-ops when SENTRY_DSN is unset.
+  void bridgeToSentry(level, msg, redactedFields);
+}
+
+/**
+ * Forward log lines to Sentry as breadcrumbs (info/warn/error) and
+ * captured messages (warn/error). Lazy-imported so the bare logger has
+ * no Sentry dependency at module init — tests that don't load Sentry
+ * still pass cleanly.
+ */
+async function bridgeToSentry(
+  level: Level,
+  msg: string,
+  fields: Record<string, unknown> | undefined,
+): Promise<void> {
+  if (typeof window !== 'undefined') return; // server-side only
+  try {
+    const { addBreadcrumb, captureMessage } = await import('@/lib/observability/sentry');
+    addBreadcrumb('logger', `${level}: ${msg}`, fields);
+    if (level === 'warn') captureMessage(msg, 'warning');
+    else if (level === 'error') captureMessage(msg, 'error');
+  } catch {
+    // observability module unavailable (test env, partial install) — no-op.
+  }
 }
 
 /**

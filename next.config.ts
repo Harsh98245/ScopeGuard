@@ -31,9 +31,19 @@ function buildCsp(): string {
       "'unsafe-eval'",
       'https://js.stripe.com',
       'https://*.posthog.com',
+      // Plaid Link client SDK is fetched from cdn.plaid.com.
+      'https://cdn.plaid.com',
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
-    'img-src': ["'self'", 'data:', 'blob:', supabaseUrl, 'https://*.stripe.com'].filter(Boolean),
+    'img-src': [
+      "'self'",
+      'data:',
+      'blob:',
+      supabaseUrl,
+      'https://*.stripe.com',
+      // Plaid renders bank logos served from its CDN.
+      'https://cdn.plaid.com',
+    ].filter(Boolean),
     'font-src': ["'self'", 'data:'],
     'connect-src': [
       "'self'",
@@ -41,10 +51,20 @@ function buildCsp(): string {
       supabaseUrl.replace('https://', 'wss://'),
       'https://api.anthropic.com',
       'https://api.stripe.com',
+      // Plaid REST endpoints — sandbox / development / production share *.plaid.com.
+      'https://*.plaid.com',
+      // PayPal OAuth + Reporting (sandbox + live).
+      'https://api-m.paypal.com',
+      'https://api-m.sandbox.paypal.com',
       posthogHost,
       'https://*.ingest.sentry.io',
     ].filter(Boolean),
-    'frame-src': ["'self'", 'https://js.stripe.com', 'https://hooks.stripe.com'],
+    'frame-src': [
+      "'self'",
+      'https://js.stripe.com',
+      'https://hooks.stripe.com',
+      'https://cdn.plaid.com',
+    ],
     'object-src': ["'none'"],
     'base-uri': ["'self'"],
     'form-action': ["'self'"],

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/scope/check/route.ts": {
+      "maxDuration": 30
+    },
+    "app/api/contracts/route.ts": {
+      "maxDuration": 30
+    },
+    "app/api/finances/transactions/route.ts": {
+      "maxDuration": 15
+    },
+    "app/api/webhooks/stripe/route.ts": {
+      "maxDuration": 10
+    },
+    "app/api/webhooks/postmark/route.ts": {
+      "maxDuration": 5
+    },
+    "app/api/webhooks/inngest/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/integrations/[source]/callback/route.ts": {
+      "maxDuration": 15
+    },
+    "app/api/health/route.ts": {
+      "maxDuration": 10
+    }
+  }
+}

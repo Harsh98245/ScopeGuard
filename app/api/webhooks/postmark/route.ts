@@ -22,6 +22,7 @@ import {
   toScopeEmailEvent,
   verifyPostmarkSignature,
 } from '@/lib/email/inbound';
+import { checkIpLimit, postmarkInboundLimiter } from '@/lib/utils/ipRateLimit';
 import { logger } from '@/lib/utils/logger';
 
 export const runtime = 'nodejs';
@@ -40,6 +41,17 @@ function err(code: string, message: string, status: number) {
  * @returns 200 with `{ accepted: true }` after enqueueing the Inngest event.
  */
 export async function POST(request: NextRequest) {
+  // IP-based rate limit BEFORE signature verification so we don't burn DB
+  // round-trips on a flood of forged requests with bad signatures.
+  const limited = await checkIpLimit(postmarkInboundLimiter, request);
+  if (limited) {
+    logger.warn('webhook.postmark.rate_limited', { ip: limited.ip });
+    return NextResponse.json<ApiError>(
+      { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } },
+      { status: 429, headers: limited.headers },
+    );
+  }
+
   if (!verifyPostmarkSignature(request.headers.get('x-postmark-signature'))) {
     logger.warn('webhook.postmark.unauthorized');
     return err('UNAUTHORIZED', 'Bad or missing X-Postmark-Signature.', 401);
