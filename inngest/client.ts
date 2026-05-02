@@ -66,6 +66,13 @@ type Events = {
       integrationId: string;
     };
   };
+  /** A new transaction row was created without a category. Triggers AI categorisation. */
+  'transaction/created': {
+    data: {
+      userId: string;
+      transactionId: string;
+    };
+  };
   /** Hourly cron trigger for incremental transaction syncs. */
   'cron/sync-transactions.tick': {
     data: Record<string, never>;
