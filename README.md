@@ -119,7 +119,7 @@ A pull request is not mergeable until:
 
 ## Build status
 
-This scaffold is **session 1 of N**. The full Build Order from the spec is:
+The full Build Order from the spec — all sessions shipped:
 
 1. ~~Scaffold~~
 2. ~~Database (schema + RLS migration)~~
@@ -127,15 +127,12 @@ This scaffold is **session 1 of N**. The full Build Order from the spec is:
 4. ~~Core AI (`parseContract.ts`, `checkScope.ts`)~~
 5. ~~Contract upload + extraction (Storage + pdf-parse + mammoth)~~
 6. ~~Inbound email pipeline (Postmark webhook + Inngest → checkScope)~~
-7. Scope-check UI (VerdictCard, ScopeLogTable, inbox feed) — _next_
-5. Contract upload + extraction
-6. Inbound email pipeline (Postmark + Inngest)
-7. Scope-check UI
-8. Stripe subscriptions + PlanGate
-9. Financial OS (transactions, P&L, tax estimate)
-10. Additional integrations (PayPal, Plaid)
-11. E2E suite
-12. Production hardening (CSP, rate-limit, Sentry, PostHog)
-13. Documentation pass
+7. ~~Scope-check UI (VerdictCard, ScopeLogTable, inbox feed + Realtime)~~
+8. ~~Stripe subscriptions + PlanGate~~
+9. ~~Financial OS (transactions, AI categoriser, P&L, US/CA/UK tax estimate)~~
+10. ~~Integrations framework (Stripe Connect, PayPal, Plaid)~~
+11. ~~Playwright E2E suite (public + auth-protected projects)~~
+12. ~~Production hardening (Sentry, PostHog, IP rate limits, deep health probe)~~
+13. ~~Documentation pass~~
 
-See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for what has shipped.
+See [`docs/CHANGELOG.md`](docs/CHANGELOG.md) for what shipped per session and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module map and request-lifecycle diagrams.

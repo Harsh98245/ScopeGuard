@@ -79,6 +79,24 @@ components:
       type: string
       enum: [IN_SCOPE, OUT_OF_SCOPE, AMBIGUOUS]
 
+    Transaction:
+      type: object
+      required: [id, userId, source, externalId, type, amount, currency, occurredAt, createdAt]
+      properties:
+        id:            { type: string, format: uuid }
+        userId:        { type: string, format: uuid }
+        source:        { type: string, enum: [STRIPE, PAYPAL, GUMROAD, SHOPIFY, ETSY, UPWORK, WISE, PLAID] }
+        externalId:    { type: string }
+        type:          { type: string, enum: [INCOME, EXPENSE] }
+        amount:        { type: string, example: '42.00' }
+        currency:      { type: string, minLength: 3, maxLength: 3 }
+        description:   { type: [string, 'null'] }
+        category:      { type: [string, 'null'] }
+        taxDeductible: { type: boolean }
+        receiptKey:    { type: [string, 'null'] }
+        occurredAt:    { type: string, format: date-time }
+        createdAt:     { type: string, format: date-time }
+
     ScopeCheckResult:
       type: object
       required: [verdict, confidence, reasoning, draftPoliteDecline, draftChangeOrder]
@@ -319,16 +337,670 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorEnvelope' }
 
-  # Future entries land here. Keep them grouped by feature, alphabetical
-  # within a group.
-  #
-  # /api/scope/check:             TODO (session 7 — manual trigger from UI)
-  # /api/finances/transactions:   TODO (session 9)
-  # /api/finances/summary:        TODO (session 9)
-  # /api/finances/tax-estimate:   TODO (session 9)
-  # /api/integrations/stripe-connect: TODO (session 8)
-  # /api/integrations/paypal:     TODO (session 10)
-  # /api/integrations/plaid:      TODO (session 10)
-  # /api/webhooks/stripe:         TODO (session 8)
-  # /api/webhooks/postmark:       TODO (session 6)
-  # /api/webhooks/inngest:        TODO (session 6)
+  /api/scope/check:
+    post:
+      summary: Manually trigger a scope check
+      description: |
+        Synchronous scope check for a given project + email body. Runs
+        `checkScope` inline (5-15 s AI call) and returns the verdict.
+        The result is also saved as a ScopeCheck row and visible in /inbox.
+
+        Use this for testing contract coverage without forwarding a real email.
+        Production inbound emails go through the Postmark webhook instead.
+      operationId: manualScopeCheck
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, emailBody]
+              properties:
+                projectId:
+                  type: string
+                  format: uuid
+                  description: UUID of the project whose contract to check against.
+                emailBody:
+                  type: string
+                  maxLength: 50000
+                  description: Plain-text body of the client email.
+                emailSubject:
+                  type: [string, 'null']
+                  maxLength: 500
+                  description: Optional subject line — improves accuracy.
+                emailFromAddress:
+                  type: [string, 'null']
+                  format: email
+                  description: Optional sender address — stored for audit.
+      responses:
+        '201':
+          description: Scope check completed and saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:               { type: string, format: uuid }
+                  verdict:          { $ref: '#/components/schemas/ScopeVerdict' }
+                  confidence:       { type: number, minimum: 0, maximum: 1 }
+                  citedClause:      { type: [string, 'null'] }
+                  clauseReference:  { type: [string, 'null'] }
+                  draftResponse:    { type: [string, 'null'] }
+                  changeOrderText:  { type: [string, 'null'] }
+                  estimatedHours:   { type: [number, 'null'] }
+                  createdAt:        { type: string, format: date-time }
+        '400':
+          description: Invalid request body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Plan limit exceeded — caller has used all monthly checks.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Project not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500':
+          description: AI scope check failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/billing/checkout:
+    post:
+      summary: Create a Stripe Checkout Session for plan upgrade
+      description: |
+        Resolves (or creates) the user's Stripe customer ID, creates a
+        subscription-mode Checkout Session, and returns its URL. The
+        client redirects the browser to that URL.
+
+        Plan provisioning is event-driven — the user's `planTier` is set
+        only after `checkout.session.completed` arrives at the
+        `/api/webhooks/stripe` endpoint.
+      operationId: createCheckoutSession
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier]
+              properties:
+                tier:
+                  type: string
+                  enum: [STARTER, PRO, BUSINESS]
+      responses:
+        '200':
+          description: Checkout URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url: { type: string, format: uri }
+        '400':
+          description: Invalid `tier` value or malformed body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '503':
+          description: Server is missing the Stripe price ID for this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Stripe API call failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/billing/portal:
+    post:
+      summary: Create a Stripe Customer Portal session
+      description: |
+        Returns the URL of a one-shot Customer Portal session for the user.
+        The portal lets the user update payment methods, view invoices,
+        switch plans, and cancel — all without us having to build that UI.
+        Requires the user to already have a `stripeCustomerId` (set on first checkout).
+      operationId: createCustomerPortalSession
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Portal URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url: { type: string, format: uri }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '409':
+          description: User has no Stripe customer record yet (pre-checkout).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Stripe API call failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/webhooks/stripe:
+    post:
+      summary: Stripe webhook receiver
+      description: |
+        Verifies the `Stripe-Signature` header against `STRIPE_WEBHOOK_SECRET`
+        using the raw request body, then dispatches to typed handlers.
+
+        Events handled:
+          - checkout.session.completed
+          - customer.subscription.updated
+          - customer.subscription.deleted
+          - invoice.paid / invoice.payment_succeeded
+          - invoice.payment_failed
+
+        Other event types return 200 with `{ accepted: true, ignored: true }`
+        so Stripe stops retrying. Idempotency is intrinsic: every handler is a
+        deterministic "set state to X" derived from the event payload.
+      operationId: stripeWebhook
+      security: [{ stripeSignature: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: A Stripe Event object — see https://stripe.com/docs/api/events.
+      responses:
+        '200':
+          description: Event accepted (handled or ignored).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: boolean }
+                  ignored:  { type: boolean }
+        '401':
+          description: Signature verification failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '500':
+          description: Handler threw — Stripe will retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/finances/transactions:
+    get:
+      summary: List transactions
+      description: |
+        Paginated, filterable transaction list. Cursor pagination via
+        `?cursor=<lastId>`. Filters: `type=INCOME|EXPENSE`,
+        `category=<slug>`, `from=<ISO>`, `to=<ISO>`, `limit=1..200`.
+
+        Gated behind the Financial OS feature (Pro+).
+      operationId: listTransactions
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - in: query
+          name: type
+          schema: { type: string, enum: [INCOME, EXPENSE] }
+        - in: query
+          name: category
+          schema: { type: string }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - in: query
+          name: cursor
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Transaction page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transactions:
+                    type: array
+                    items: { $ref: '#/components/schemas/Transaction' }
+                  nextCursor: { type: [string, 'null'], format: uuid }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    post:
+      summary: Create a transaction (manual entry)
+      description: |
+        Insert a manual income/expense row. EXPENSE rows without a
+        category trigger the `transaction/created` Inngest event so the
+        AI categoriser fills it in asynchronously.
+
+        Gated behind the Financial OS feature (Pro+).
+      operationId: createTransaction
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, amount, currency]
+              properties:
+                type:           { type: string, enum: [INCOME, EXPENSE] }
+                amount:         { type: string, example: '42.00' }
+                currency:       { type: string, minLength: 3, maxLength: 3 }
+                description:    { type: [string, 'null'] }
+                category:       { type: [string, 'null'] }
+                taxDeductible:  { type: boolean }
+                occurredAt:     { type: [string, 'null'], format: date-time }
+      responses:
+        '201':
+          description: Transaction created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transaction' }
+        '400':
+          description: Validation failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/finances/transactions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      summary: Update transaction (category / taxDeductible / description)
+      operationId: updateTransaction
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category:      { type: [string, 'null'] }
+                taxDeductible: { type: boolean }
+                description:   { type: [string, 'null'] }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transaction' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Transaction not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    delete:
+      summary: Delete a transaction
+      operationId: deleteTransaction
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Transaction not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/finances/summary:
+    get:
+      summary: P&L summary, bucketed by currency
+      description: |
+        Returns one bucket per currency the user has activity in, plus a
+        per-currency category breakdown for expenses. Default range is the
+        current calendar month (UTC); override with `?from=ISO&to=ISO`.
+      operationId: financesSummary
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+        - in: query
+          name: currency
+          schema: { type: string, minLength: 3, maxLength: 3 }
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  from:             { type: string, format: date-time }
+                  to:               { type: string, format: date-time }
+                  transactionCount: { type: integer }
+                  buckets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        currency: { type: string }
+                        income:   { type: string }
+                        expense:  { type: string }
+                        net:      { type: string }
+                  categoryBreakdown:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          category: { type: string }
+                          total:    { type: string }
+                          share:    { type: number, minimum: 0, maximum: 1 }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/finances/tax-estimate:
+    get:
+      summary: Quarterly tax estimate
+      description: |
+        Aggregates YTD income and deductible expenses in the user's
+        jurisdictional currency, projects them to a full year, and runs
+        the per-jurisdiction estimator (US/CA/UK).
+
+        Estimate is GUIDANCE, not tax advice — surfaces a disclaimer banner
+        in the UI and `notes[]` in the response.
+      operationId: financesTaxEstimate
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Tax estimate.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jurisdiction: { type: string, enum: [US, CA, UK] }
+                  yearToDate:
+                    type: object
+                    properties:
+                      income:             { type: string }
+                      deductibleExpenses: { type: string }
+                      net:                { type: string }
+                  projectedAnnualNet: { type: string }
+                  estimate:
+                    type: object
+                    properties:
+                      jurisdiction:        { type: string, enum: [US, CA, UK] }
+                      currency:            { type: string }
+                      annualNetIncome:     { type: string }
+                      estimatedAnnualTax:  { type: string }
+                      estimatedQuarterly:  { type: string }
+                      effectiveRate:       { type: number }
+                      lineItems:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            label:       { type: string }
+                            amount:      { type: string }
+                            description: { type: [string, 'null'] }
+                      notes:
+                        type: array
+                        items: { type: string }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Financial OS not unlocked on this plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/integrations:
+    get:
+      summary: List the user's connected integrations
+      description: |
+        Returns one row per integration the user has connected. Encrypted
+        token columns (accessToken, refreshToken) are NEVER included in
+        the response. Gated behind the Financial OS feature (Pro+).
+      operationId: listIntegrations
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Integrations list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  integrations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:             { type: string, format: uuid }
+                        source:         { type: string, enum: [STRIPE, PAYPAL, PLAID] }
+                        isActive:       { type: boolean }
+                        lastSyncedAt:   { type: [string, 'null'], format: date-time }
+                        tokenExpiresAt: { type: [string, 'null'], format: date-time }
+                        metadata:       { type: object }
+                        createdAt:      { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Integrations require the Pro plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/integrations/{source}/connect:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema: { type: string, enum: [STRIPE, PAYPAL, PLAID] }
+    post:
+      summary: Start the connect flow for a provider
+      description: |
+        Returns an OAuth authorize URL (`{ mode: 'redirect', url }`) for
+        Stripe and PayPal, or a one-shot Plaid Link token
+        (`{ mode: 'plaid-link', state, linkToken, expiration }`) for Plaid.
+      operationId: startIntegrationConnect
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Connect payload.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      mode: { type: string, enum: [redirect] }
+                      url:  { type: string, format: uri }
+                  - type: object
+                    properties:
+                      mode:       { type: string, enum: [plaid-link] }
+                      state:      { type: string }
+                      linkToken:  { type: string }
+                      expiration: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Integrations require the Pro plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Unknown integration source or no driver registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Provider error (Stripe/PayPal/Plaid API failure).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/integrations/{source}/callback:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema: { type: string, enum: [STRIPE, PAYPAL] }
+      - name: code
+        in: query
+        required: true
+        schema: { type: string }
+      - name: state
+        in: query
+        required: true
+        schema: { type: string }
+    get:
+      summary: OAuth callback for redirect-style providers
+      description: |
+        Verifies the signed `state` token, exchanges `code` for credentials
+        via the driver, encrypts the tokens, and persists an Integration row.
+        Always responds with a 302 to /settings/integrations carrying either
+        a `?connected=<source>` (success) or `?error=<code>` (failure) param.
+      operationId: integrationCallback
+      responses:
+        '302':
+          description: Redirect to /settings/integrations.
+
+  /api/integrations/{source}/exchange:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema: { type: string, enum: [PLAID] }
+    post:
+      summary: Plaid public-token → access-token exchange
+      description: |
+        Plaid Link runs in-page (no redirect). When Link succeeds it returns
+        a public_token to JS; the client POSTs it here, the route runs the
+        Plaid driver's `handleCallback`, and persists an Integration row.
+      operationId: plaidExchange
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [publicToken, state]
+              properties:
+                publicToken: { type: string }
+                state:       { type: string }
+      responses:
+        '201':
+          description: Integration created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:            { type: boolean }
+                  integrationId: { type: string, format: uuid }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '402':
+          description: Integrations require the Pro plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '404':
+          description: Source does not support exchange (only PLAID does).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '502':
+          description: Plaid API failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/integrations/{source}:
+    parameters:
+      - name: source
+        in: path
+        required: true
+        schema: { type: string, enum: [STRIPE, PAYPAL, PLAID] }
+    delete:
+      summary: Disconnect the integration
+      description: |
+        Best-effort revocation at the provider, then row deletion. Always
+        succeeds (returns 204) even if revocation fails — the user must
+        never be locked into a half-connected state.
+      operationId: disconnectIntegration
+      security: [{ cookieAuth: [] }]
+      responses:
+        '204': { description: Disconnected. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Integration not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    post:
+      summary: Trigger a manual sync
+      description: Sends an `integration/connected` Inngest event to backfill / catch up.
+      operationId: syncIntegration
+      security: [{ cookieAuth: [] }]
+      responses:
+        '202':
+          description: Sync queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:     { type: boolean }
+                  status: { type: string, enum: [queued] }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: Active integration not found.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }

@@ -213,6 +213,169 @@ The inbound email pipeline depends on a Postmark Server with inbound forwarding 
 
 If the webhook returns 401, the `X-Postmark-Signature` header value doesn't match `POSTMARK_WEBHOOK_SECRET`. Re-copy from the Postmark dashboard.
 
+## Production hardening checklist
+
+Run through this list before flipping a new environment to "production". Each item links to the file or dashboard that owns the configuration.
+
+### Observability
+
+- [ ] **Sentry project created**, DSN copied to:
+  - `SENTRY_DSN` (server runtime)
+  - `NEXT_PUBLIC_SENTRY_DSN` (browser SDK)
+  - `SENTRY_AUTH_TOKEN` (source-map upload during build — optional but recommended)
+- [ ] `pnpm add @sentry/nextjs` (the wrappers gracefully no-op without the package, but production needs it).
+- [ ] Throw a synthetic error from `/settings` to confirm capture lands in Sentry:
+  ```ts
+  // Inside a server component, just for the smoke test.
+  throw new Error('e2e-sentry-smoke');
+  ```
+- [ ] **PostHog project created**, key copied to:
+  - `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` (browser SDK)
+  - `POSTHOG_API_KEY` (server-side `posthog-node`)
+- [ ] `pnpm add posthog-js posthog-node`.
+- [ ] Smoke-test by signing in and watching the user appear in PostHog → People.
+
+### Rate limits
+
+- [ ] **Upstash Redis instance provisioned**, REST URL + token in env (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`).
+- [ ] Verify per-user limiters are active by hammering `/api/scope/check` 50 times — request 51 should return 429.
+- [ ] Verify the webhook IP limiter is active by replaying a Postmark inbound 600 times from the Stripe CLI — request 601 should return 429.
+
+### Health & readiness
+
+- [ ] `curl https://app.scopeguard.app/api/health` returns 200 with `{ "ok": true, "version": "..." }`.
+- [ ] `curl https://app.scopeguard.app/api/health?deep=1` returns 200 with `checks.{database,redis,env}.ok = true` for all three. Returns 503 if any required env var is missing.
+- [ ] Hook the deep endpoint into your external uptime monitor (Uptime Kuma, Better Stack, Vercel Monitoring).
+
+### Vercel deploy configuration
+
+- [ ] **Region** matches `vercel.json` (`iad1` by default).
+- [ ] Per-route `maxDuration` values from `vercel.json` are accepted by the Vercel plan (Pro+ for the 30s scope-check timeout).
+- [ ] Inngest production app configured separately at app.inngest.com — Vercel cron is NOT used; Inngest schedules `cron/sync-transactions.tick` itself.
+- [ ] `INNGEST_EVENT_KEY` + `INNGEST_SIGNING_KEY` set in Vercel env (production Inngest app).
+
+### Security headers
+
+- [ ] CSP report verified via `curl -I https://app.scopeguard.app/` — ensure no third-party domain you actually use is blocked. Add to `next.config.ts → buildCsp()` if so.
+- [ ] HSTS shows `max-age=63072000; includeSubDomains; preload` (already configured).
+- [ ] Submit the apex domain to https://hstspreload.org/ for browser-baked HSTS.
+
+### Secrets rotation cadence
+
+| Secret | Cadence | Procedure |
+| --- | --- | --- |
+| `ENCRYPTION_KEY` | Quarterly | Re-encryption Inngest job — see `## 5. Rotating secrets` above. |
+| `STRIPE_SECRET_KEY` | After leak only | Stripe Dashboard → Developers → Keys → roll. |
+| `SUPABASE_SERVICE_ROLE_KEY` | After leak only | Supabase Dashboard → Settings → API → reset. |
+| `POSTMARK_SERVER_TOKEN` | Annually | See § 5. |
+| `ANTHROPIC_API_KEY` | Annually | See § 5. |
+
+---
+
+## Integrations setup (one-time per provider)
+
+The Financial OS auto-syncs transactions from Stripe Connect, PayPal, and Plaid.
+Each provider needs developer credentials configured in the env before users can connect.
+
+### Stripe Connect
+
+1. **Register a Connect platform** at Dashboard → Connect → Settings → "Apply" if not already enrolled.
+2. **Configure OAuth** at Dashboard → Connect → Settings → OAuth:
+   - Redirect URI: `https://app.scopeguard.app/api/integrations/STRIPE/callback`
+   - For local dev: also add `http://localhost:3000/api/integrations/STRIPE/callback`.
+3. Copy the OAuth client_id (looks like `ca_…`) into `STRIPE_CONNECT_CLIENT_ID`.
+4. The platform's `STRIPE_SECRET_KEY` (already configured for subscriptions billing) is reused for the OAuth code exchange.
+
+### PayPal
+
+1. Create an app at developer.paypal.com → Apps & Credentials → Create App (REST API). Use the sandbox flavour for development.
+2. Enable the "Log In with PayPal" feature inside the app and request the `https://uri.paypal.com/services/reporting/search/read` scope.
+3. Set the return URL to `https://app.scopeguard.app/api/integrations/PAYPAL/callback`.
+4. Capture the credentials:
+   - `PAYPAL_CLIENT_ID`
+   - `PAYPAL_CLIENT_SECRET`
+   - `PAYPAL_ENV=sandbox` (or `live`)
+
+### Plaid
+
+1. Sign up at dashboard.plaid.com — sandbox is free and unlimited.
+2. Capture credentials:
+   - `PLAID_CLIENT_ID`
+   - `PLAID_SECRET`
+   - `PLAID_ENV=sandbox` (or `development` or `production`)
+3. Install the React SDK in the app: `pnpm add react-plaid-link`. The `ConnectButton` client island dynamically imports it; without it, clicking Connect for Plaid surfaces a loud error.
+4. Whitelist your callback domain (Plaid Link is in-page, so no OAuth redirect URL is needed — just the domain you'll run the app on).
+
+### Verify the connect flow end-to-end
+
+1. Sign in as a PRO user.
+2. Visit `/settings/integrations`. Click Connect on the provider.
+3. Approve at the provider's consent screen.
+4. You should land back at `/settings/integrations?connected=<SOURCE>`.
+5. Check the Integration row in SQL: `select source, "lastSyncedAt", metadata from integrations where "userId" = '<id>';`
+6. Within ~1 minute, INCOME or EXPENSE rows should appear in the Transactions list.
+
+If the callback returns `?error=callback_failed`, check the structured logs for `integrations.callback.failed` — the `message` field has the provider error.
+
+---
+
+## Stripe setup (one-time)
+
+The billing surface (`/settings/billing`) depends on a configured Stripe account
+with three subscription products and a webhook endpoint. One-time setup:
+
+1. **Create the products + prices** in Stripe Dashboard → Products. Each plan
+   needs a recurring monthly price. Capture the price IDs into env vars:
+   - `STRIPE_STARTER_PRICE_ID` — Starter, $19/month
+   - `STRIPE_PRO_PRICE_ID` — Pro, $39/month
+   - `STRIPE_BUSINESS_PRICE_ID` — Business, $69/month
+2. **Configure the Customer Portal** at Dashboard → Settings → Billing → Customer Portal:
+   - Allow customers to update payment methods + cancel.
+   - Allow plan switching across the three products above.
+   - Set the default return URL to `https://app.scopeguard.app/settings/billing`.
+3. **Set up the webhook** at Dashboard → Developers → Webhooks → Add endpoint:
+   - URL: `https://app.scopeguard.app/api/webhooks/stripe`.
+   - Events: `checkout.session.completed`, `customer.subscription.updated`,
+     `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`.
+   - Capture the signing secret into `STRIPE_WEBHOOK_SECRET`.
+4. **Set the API key** at Dashboard → Developers → API keys:
+   - Copy the secret key into `STRIPE_SECRET_KEY` (use a restricted key in production
+     limited to: customers RW, checkout sessions RW, billing portal sessions RW,
+     subscriptions R, invoices R, webhook endpoints R).
+5. **Local development**: install the Stripe CLI and run
+   `stripe listen --forward-to localhost:3000/api/webhooks/stripe` to forward
+   live events to your local box. The CLI prints a `whsec_…` signing secret —
+   put it in `.env.local` as `STRIPE_WEBHOOK_SECRET` for the dev session.
+6. **Smoke-test**: hit `/settings/billing` while signed in, click Upgrade on
+   any plan, complete checkout with test card `4242 4242 4242 4242`. Within a
+   few seconds the user row's `planTier` should flip; verify in the SQL editor:
+   ```sql
+   select id, email, "planTier", "subscriptionStatus", "currentPeriodEnd"
+     from users where email = 'you@example.com';
+   ```
+
+If the webhook returns 401, `STRIPE_WEBHOOK_SECRET` doesn't match the dashboard
+value. If checkout returns 503, one of `STRIPE_*_PRICE_ID` is missing.
+
+---
+
+## Enabling Realtime for scope_checks (one-time)
+
+The `/inbox` feed uses Supabase Realtime to push new verdicts without a page reload.
+The `scope_checks` table must be added to the Supabase realtime publication once per environment:
+
+```sql
+-- Run in the Supabase SQL editor against your project.
+alter publication supabase_realtime add table scope_checks;
+```
+
+After this, any INSERT to `scope_checks` will be broadcast to subscribers.
+RLS policies on `scope_checks` are respected — clients receive only the rows their
+JWT is allowed to SELECT. If Realtime is not enabled the inbox still works; it just
+requires a manual page refresh to see new verdicts.
+
+---
+
 ## Storage bucket setup (one-time)
 
 The contract upload pipeline expects a private Storage bucket named `contracts`. Create it once per environment:

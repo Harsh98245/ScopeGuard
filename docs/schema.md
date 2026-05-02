@@ -12,17 +12,21 @@ ScopeGuard customer. The row id mirrors the Supabase `auth.users.id` so RLS can 
 
 | Column                | Type                  | Constraints                          | Description                                                                            |
 | --------------------- | --------------------- | ------------------------------------ | -------------------------------------------------------------------------------------- |
-| `id`                  | `uuid`                | PK, default `gen_random_uuid()`      | Equals `auth.users.id`.                                                                |
-| `email`               | `text`                | UNIQUE, NOT NULL                     | Login email. Synced from Supabase auth.                                                |
-| `stripeCustomerId`    | `text`                | UNIQUE, nullable                     | Created on first checkout.                                                             |
-| `planTier`            | `PlanTier`            | NOT NULL, default `FREE`             | Active subscription tier; mutated only by Stripe webhook.                              |
-| `inboundEmailAlias`   | `text`                | UNIQUE, NOT NULL                     | Per-user forwarding alias, e.g. `jane-abc123@inbound.scopeguard.app`.                  |
-| `timezone`            | `text`                | NOT NULL, default `America/Toronto` | IANA tz used for date formatting.                                                       |
-| `jurisdiction`        | `Jurisdiction`        | NOT NULL, default `US`               | Tax jurisdiction; drives `lib/tax/estimate.ts`.                                        |
-| `createdAt`           | `timestamp(3)`        | NOT NULL, default `now()`            |                                                                                        |
-| `updatedAt`           | `timestamp(3)`        | NOT NULL                             | Auto-managed by Prisma `@updatedAt`.                                                   |
+| `id`                    | `uuid`            | PK, default `gen_random_uuid()`     | Equals `auth.users.id`.                                                                |
+| `email`                 | `text`            | UNIQUE, NOT NULL                    | Login email. Synced from Supabase auth.                                                |
+| `stripeCustomerId`      | `text`            | UNIQUE, nullable                    | Created on first checkout.                                                             |
+| `stripeSubscriptionId`  | `text`            | UNIQUE, nullable                    | Active Stripe subscription. Null on FREE or after cancellation.                        |
+| `stripePriceId`         | `text`            | nullable                            | Currently-billed Stripe price ID; drives `tierFromPriceId` resolution.                 |
+| `subscriptionStatus`    | `text`            | nullable                            | Stripe sub status: `active|trialing|past_due|canceled|unpaid|incomplete[_expired]|paused`. |
+| `currentPeriodEnd`      | `timestamp(3)`    | nullable                            | End of current billing period. Surfaced as "Renews on" / "Cancels on".                 |
+| `planTier`              | `PlanTier`        | NOT NULL, default `FREE`            | Active subscription tier; mutated only by Stripe webhook.                              |
+| `inboundEmailAlias`     | `text`            | UNIQUE, NOT NULL                    | Per-user forwarding alias, e.g. `jane-abc123@inbound.scopeguard.app`.                  |
+| `timezone`              | `text`            | NOT NULL, default `America/Toronto` | IANA tz used for date formatting.                                                       |
+| `jurisdiction`          | `Jurisdiction`    | NOT NULL, default `US`              | Tax jurisdiction; drives `lib/finances/tax/`.                                          |
+| `createdAt`             | `timestamp(3)`    | NOT NULL, default `now()`           |                                                                                        |
+| `updatedAt`             | `timestamp(3)`    | NOT NULL                            | Auto-managed by Prisma `@updatedAt`.                                                   |
 
-Indexes: `users_planTier_idx`.
+Indexes: `users_planTier_idx`. Subscription columns are mutated EXCLUSIVELY by `app/api/webhooks/stripe/route.ts` — application code reads them but never writes them directly.
 
 ---
 
