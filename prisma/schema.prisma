@@ -103,6 +103,24 @@ model User {
   /// Stripe customer ID created on first checkout. Null until the user starts a paid plan.
   stripeCustomerId String? @unique
 
+  /// Active Stripe subscription ID. Null on the FREE plan or after cancellation.
+  /// Mutated only by the Stripe webhook handler (POST /api/webhooks/stripe).
+  stripeSubscriptionId String? @unique
+
+  /// Currently-billed Stripe price ID. Null on the FREE plan. Used by the
+  /// webhook to drive `tierFromPriceId` and to display "Current plan" in /settings/billing.
+  stripePriceId String?
+
+  /// Stripe subscription status: `active`, `trialing`, `past_due`, `canceled`,
+  /// `incomplete`, `incomplete_expired`, `unpaid`, `paused`. Treat anything
+  /// other than `active`/`trialing` as a soft suspension when enforcing limits.
+  subscriptionStatus String?
+
+  /// End of the current billing period. After this timestamp Stripe will either
+  /// renew (and emit `invoice.paid`) or expire the subscription. Used in the UI
+  /// to show "Renews on" / "Cancels on".
+  currentPeriodEnd DateTime?
+
   /// Active subscription tier. Mutated only by the Stripe webhook handler.
   planTier PlanTier @default(FREE)
 

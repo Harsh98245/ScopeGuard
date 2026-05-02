@@ -15,6 +15,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
 import { requireCurrentUser } from '@/lib/auth/getCurrentUser';
+import { checkActiveProjectLimit } from '@/lib/billing/limits';
 import { logger } from '@/lib/utils/logger';
 import { CurrencyCodeSchema, EmailSchema, MoneyStringSchema } from '@/lib/utils/validation';
 import { prisma } from '@/lib/prisma';
@@ -64,6 +65,15 @@ export async function createProjectAction(
       if (key && !fieldErrors[key]) fieldErrors[key] = issue.message;
     }
     return { error: parsed.error.issues[0]?.message ?? 'Invalid input.', fieldErrors };
+  }
+
+  // Enforce the active-projects plan limit. The limit is counted *before*
+  // creation so the new project itself counts toward the cap.
+  const verdict = await checkActiveProjectLimit(user);
+  if (!verdict.allowed) {
+    return {
+      error: `You're at the active-project limit for the ${user.planTier} plan (${verdict.usage}/${verdict.limit}). Upgrade to ${verdict.suggestedTier} to add more.`,
+    };
   }
 
   const project = await prisma.project.create({
