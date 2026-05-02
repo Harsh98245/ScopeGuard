@@ -26,6 +26,12 @@ const badgeVariants = cva(
         outline: 'text-foreground',
         success:
           'border-transparent bg-[hsl(var(--verdict-in-scope))] text-white hover:opacity-90',
+        'verdict-in-scope':
+          'border-transparent bg-[hsl(var(--verdict-in-scope))] text-white hover:opacity-90',
+        'verdict-out-of-scope':
+          'border-transparent bg-[hsl(var(--verdict-out-of-scope))] text-white hover:opacity-90',
+        'verdict-ambiguous':
+          'border-transparent bg-[hsl(var(--verdict-ambiguous))] text-white hover:opacity-90',
       },
     },
     defaultVariants: { variant: 'default' },

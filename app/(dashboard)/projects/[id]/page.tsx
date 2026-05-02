@@ -1,14 +1,16 @@
 /**
  * @file app/(dashboard)/projects/[id]/page.tsx
  * @description Project detail page. Shows the project header, the latest
- *              contract's parse status, and a placeholder for the scope-log
- *              (which lands in session 7).
+ *              contract's parse status, and a compact scope-log table of the
+ *              20 most recent verdicts. A "Run manual check" link navigates
+ *              to the scope-check form at /projects/[id]/scope-check.
  */
 
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ScopeLogTable } from '@/components/scope/ScopeLogTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -48,6 +50,23 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
       ? 'parsed'
       : 'pending';
 
+  // Fetch the 20 most recent scope checks for the log table.
+  const scopeChecks = await prisma.scopeCheck.findMany({
+    where: { projectId: project.id },
+    select: {
+      id: true,
+      verdict: true,
+      confidence: true,
+      emailSubject: true,
+      emailFromAddress: true,
+      userAction: true,
+      createdAt: true,
+      projectId: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 20,
+  });
+
   return (
     <div className="space-y-6">
       <header className="space-y-1">
@@ -69,14 +88,20 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
                 : 'No hourly rate set'}
             </p>
           </div>
-          <Button asChild>
-            <Link href={`/projects/${project.id}/contracts`}>
-              {latest ? 'Manage contracts' : 'Upload contract'}
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href={`/projects/${project.id}/scope-check`}>Run manual check</Link>
+            </Button>
+            <Button asChild>
+              <Link href={`/projects/${project.id}/contracts`}>
+                {latest ? 'Manage contracts' : 'Upload contract'}
+              </Link>
+            </Button>
+          </div>
         </div>
       </header>
 
+      {/* Active contract card */}
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
           <div className="space-y-1">
@@ -103,18 +128,27 @@ export default async function ProjectDetailPage({ params }: ProjectPageProps) {
         ) : null}
       </Card>
 
+      {/* Scope log */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Recent scope checks</CardTitle>
-          <CardDescription>
-            Verdicts on emails forwarded to your inbound alias appear here.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+          <div className="space-y-1">
+            <CardTitle className="text-lg">Recent scope checks</CardTitle>
+            <CardDescription>
+              Verdicts on emails forwarded to your inbound alias, newest first.
+            </CardDescription>
+          </div>
+          {scopeChecks.length > 0 && (
+            <Button asChild variant="ghost" size="sm">
+              <Link href="/inbox">View all →</Link>
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Scope-log table lands in session 7. Until then, verdicts are stored but not yet
-            rendered.
-          </p>
+          <ScopeLogTable
+            checks={scopeChecks}
+            projectId={project.id}
+            limit={10}
+          />
         </CardContent>
       </Card>
     </div>
