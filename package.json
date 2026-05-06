@@ -5,7 +5,8 @@
   "description": "AI-powered scope enforcement and financial OS for freelancers and solopreneurs.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "next lint",
     "format": "prettier --write .",
