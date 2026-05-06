@@ -14,6 +14,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PostHogIdentify } from '@/components/observability/PostHogProvider';
 import { ensureUserProfile } from '@/lib/auth/ensureUserProfile';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 
@@ -67,6 +68,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </div>
       </header>
       <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">{children}</main>
+      {/* Lazy PostHog identification — root layout can't do this without
+          breaking build-time page data collection (see app/layout.tsx). */}
+      <PostHogIdentify
+        distinctId={user.id}
+        identity={{ planTier: user.planTier, jurisdiction: user.jurisdiction }}
+      />
     </div>
   );
 }

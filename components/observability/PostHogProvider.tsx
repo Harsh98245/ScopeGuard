@@ -1,13 +1,18 @@
 /**
  * @file components/observability/PostHogProvider.tsx
- * @description Client-side PostHog SDK bootstrap. Mounted once at the
- *              root of the app (in `app/layout.tsx`) so every page is
- *              captured automatically. Identifies the signed-in user
- *              when their id is supplied.
+ * @description Client-side PostHog SDK bootstrap.
+ *
+ *              Mounted in two places:
+ *                - PostHogProvider — root layout (anonymous pageviews work
+ *                  for the whole app, including marketing pages).
+ *                - PostHogIdentify — dashboard layout, after the user is
+ *                  resolved (server-side query is safe there because the
+ *                  request context exists). Calling identify in the root
+ *                  layout would force every route to be dynamic AND break
+ *                  build-time page-data collection.
  *
  *              When `NEXT_PUBLIC_POSTHOG_KEY` is unset (dev / preview
- *              without analytics), the provider renders children but
- *              never loads the SDK — useful for local iteration.
+ *              without analytics), every export is a graceful no-op.
  */
 
 'use client';
@@ -83,4 +88,33 @@ export function PostHogProvider({ distinctId, identity, children }: PostHogProvi
   }, [pathname, searchParams]);
 
   return <>{children}</>;
+}
+
+// ---------------------------------------------------------------------------
+// PostHogIdentify — minimal client island for the dashboard layout
+// ---------------------------------------------------------------------------
+
+interface PostHogIdentifyProps {
+  distinctId: string;
+  identity?: Record<string, unknown>;
+}
+
+/**
+ * Calls posthog.identify() with the signed-in user. Renders nothing.
+ * Mounted by `app/(dashboard)/layout.tsx` so identification only happens
+ * inside the authenticated surface — never blocks the public marketing
+ * page or breaks build-time analysis of route handlers.
+ */
+export function PostHogIdentify({ distinctId, identity }: PostHogIdentifyProps) {
+  useEffect(() => {
+    void (async () => {
+      const mod = (await import('posthog-js').catch(() => null)) as
+        | { default: PostHogClient }
+        | null;
+      if (!mod?.default?.__loaded) return;
+      mod.default.identify(distinctId, identity);
+    })();
+  }, [distinctId, identity]);
+
+  return null;
 }
