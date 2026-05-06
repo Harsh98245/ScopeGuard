@@ -1,13 +1,13 @@
 /**
- * @file next.config.ts
+ * @file next.config.mjs
  * @description Next.js configuration. Sets strict security headers, CSP, image
  *              allowlist for Supabase Storage, and webpack tweaks needed for
  *              the pdf-parse dependency in serverless functions.
- * @author ScopeGuard
- * @lastModified 2026-04-27
+ *
+ *              File extension is .mjs (not .ts) because Next.js 14 doesn't
+ *              support TypeScript config — that arrived in Next 15. Stays as
+ *              .mjs until we bump major.
  */
-
-import type { NextConfig } from 'next';
 
 /**
  * Build the Content Security Policy header value.
@@ -17,13 +17,13 @@ import type { NextConfig } from 'next';
  * existing directives. `'unsafe-inline'` for styles is required by Tailwind
  * preflight in dev; consider replacing with hashes in a follow-up.
  *
- * @returns The CSP header value as a single-line string.
+ * @returns {string} The CSP header value as a single-line string.
  */
-function buildCsp(): string {
-  const supabaseUrl = process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? '';
-  const posthogHost = process.env['NEXT_PUBLIC_POSTHOG_HOST'] ?? 'https://us.i.posthog.com';
+function buildCsp() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? 'https://us.i.posthog.com';
 
-  const directives: Record<string, string[]> = {
+  const directives = {
     'default-src': ["'self'"],
     'script-src': [
       "'self'",
@@ -77,7 +77,8 @@ function buildCsp(): string {
     .join('; ');
 }
 
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
