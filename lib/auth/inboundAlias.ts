@@ -53,26 +53,29 @@ function randomSuffix(): string {
   return randomBytes(6).toString('hex').slice(0, ALIAS_RANDOM_LEN);
 }
 
+/** Default domain when INBOUND_EMAIL_DOMAIN is unset. Aliases generated with
+ *  this domain will NOT receive mail until you wire up Postmark + DNS — the
+ *  alias is still safe to persist (UNIQUE constraint protects against reuse)
+ *  and can be regenerated later. Failing the user signup just because Postmark
+ *  isn't configured yet was the wrong trade-off. */
+const FALLBACK_DOMAIN = 'inbound.scopeguard.app';
+
 /**
  * Generate a fresh inbound email alias for a user.
  *
  * @param email - The user's signup email — used to seed the human-readable slug.
  * @param domain - Override the configured domain. Defaults to
- *                 `process.env.INBOUND_EMAIL_DOMAIN`.
+ *                 `process.env.INBOUND_EMAIL_DOMAIN`, which itself falls back
+ *                 to {@link FALLBACK_DOMAIN}.
  * @returns Full email address, e.g. `jane-doe-7a2b9f1c@inbound.scopeguard.app`.
- * @throws Error when `domain` is not provided and INBOUND_EMAIL_DOMAIN is
- *         missing — failing here is preferable to silently writing a half-
- *         constructed alias to the database.
  *
  * @example
  *   const alias = generateInboundAlias('jane@gmail.com');
  *   await prisma.user.create({ data: { ...rest, inboundEmailAlias: alias } });
  */
 export function generateInboundAlias(email: string, domain?: string): string {
-  const resolvedDomain = domain ?? process.env['INBOUND_EMAIL_DOMAIN'];
-  if (!resolvedDomain) {
-    throw new Error('INBOUND_EMAIL_DOMAIN env var is required to generate inbound aliases.');
-  }
+  const resolvedDomain =
+    domain ?? process.env['INBOUND_EMAIL_DOMAIN'] ?? FALLBACK_DOMAIN;
   const slug = slugFromEmail(email);
   const suffix = randomSuffix();
   return `${slug}-${suffix}@${resolvedDomain}`;
